@@ -1,35 +1,25 @@
 'use server';
 
-import { MongoClient, ServerApiVersion, ChangeStream, ChangeStreamInsertDocument } from "mongodb";
+import { MongoClient } from "mongodb";
 import * as dotenv from 'dotenv';
 dotenv.config({ path: '.env.local' });
-import WebSocket, { WebSocketServer, } from 'ws';
+import { WebSocketServer, } from 'ws';
+import {
+    ActiveWebsocket,
+    ChangeStreamInsertDoc,
+    ChatMessage,
+    CustomContext
+} from './types';
+import util from 'util';
+import { BACKLOG_CONNECTIONS, CHANGE_STREAM_LOOP_MS, CHAT_COLLECTION, PAYLOAD_SIZE_BYTES, RATE_LIMIT_HALF_MIN } from "./constants";
 
-// Replace the uri string with your MongoDB deployment's connection string
+//@ts-ignore
+const deployment: 'prod' | 'dev' = process.env.DEPLOYMENT!;
 const uri = process.env.MONGODB_URL!;
 const dbName = process.env.DB_NAME!;
-const colName = process.env.COL_NAME!;
+const colName = CHAT_COLLECTION;
 console.log(dbName, colName);
 
-export interface ChatMessage {
-    msg: string;
-    imageUrl: string;
-    displayName: string;
-    ts: number;
-    seen: boolean;
-};
-
-export interface ActiveWebsocket extends WebSocket {
-    isAlive: boolean;
-};
-
-export interface WebsocketChangeStreamHandler {
-    cs?: ChangeStream | null;
-    wss?: WebSocketServer | null;
-    pinger?: NodeJS.Timeout;
-};
-
-type ChangeStreamInsertDoc = ChangeStreamInsertDocument<ChatMessage>;
 
 
 export const simulateAsyncPause = (t: number) =>
@@ -38,28 +28,47 @@ export const simulateAsyncPause = (t: number) =>
     });
 
 export async function setupMongoChangeStream(
-    changeStream: WebsocketChangeStreamHandler,
-    wss: WebSocketServer,
+    context: CustomContext,
 ) {
     const client = new MongoClient(uri,);
     try {
         const database = client.db(dbName);
         const chat_server = database.collection<ChatMessage>(colName);
         // Open a Change Stream on the "haikus" collection
-        changeStream.cs = chat_server.watch();
+        context.cs = chat_server.watch();
 
         // Set up a change stream listener when change events are emitted
-        changeStream.cs.on("change", next => {
+        context.cs.on("change", next => {
             // Print any change event
             console.log("received a change to the collection: \t", next);
-            wss.clients.forEach((ws) => {
-                if (next.operationType === 'insert' && next.ns.coll === colName) {
-                    const data = next as ChangeStreamInsertDoc
-                    ws.send(JSON.stringify(data.fullDocument), (error) => {
-
-                    })
+            if (next.operationType === 'insert' && next.ns.coll === colName) {
+                const data = (next as ChangeStreamInsertDoc).fullDocument;
+                const user = context.userMap[data.userId];
+                if (data.roomId)
+                    var room = context.roomMap['__global__'];
+                else
+                    var room = context.roomMap[data.roomId!];
+                const chatMessage: ChatMessage = {
+                    msg: data.msg,
+                    roomId: data.roomId,
+                    ts: data.ts,
+                    userId: data.userId,
+                    description: user?.description,
+                    displayName: user?.displayName,
+                    imageUrl: user?.profilePicture,
                 }
-            })
+
+                let currentClient: ActiveWebsocket | undefined = room.userWSHead;
+                while (currentClient) {
+                    // @ts-ignore
+                    console.log('clientAlive:', currentClient.isAlive)
+
+                    currentClient.send(JSON.stringify(chatMessage), (error) => {
+                        console.log('Faield to send message:', error);
+                    })
+                    currentClient = currentClient.nextClientInRoom;
+                }
+            }
         });
 
         // Pause before inserting a document
@@ -67,24 +76,25 @@ export async function setupMongoChangeStream(
 
         // Insert a new document into the collection
         await chat_server.insertOne({
-            displayName: "Shriveled Datum",
+            // displayName: "Shriveled Datum",
+            userId: '123243535',
+            roomId: 'Global',
             msg: "No bytes, no problem. Just insert a document, in MongoDB",
-            imageUrl: 'https://imagedelivery.net/9i0Mt_dC7lopRIG36ZQvKw/XScape%20Legends%20Card%20Assassin.png/w=200',
+            // imageUrl: 'https://imagedelivery.net/9i0Mt_dC7lopRIG36ZQvKw/XScape%20Legends%20Card%20Assassin.png/w=200',
             ts: Date.now(),
-            seen: false,
         });
 
         while (true) {
 
             const t = Date.now()
             console.log('changeStream running...', t)
-            await simulateAsyncPause(3000);
+            await simulateAsyncPause(CHANGE_STREAM_LOOP_MS);
             console.log('changeStream running...', t)
-            if (changeStream.cs.closed) {
-                throw new Error("WSS connection reset!");
+            if (context.cs.closed) {
+                return setupMongoChangeStream(context);
             }
         }
-        // await changeStream.close()
+        // await context.close()
         // console.log('changeStream closing...', Date.now())
     } finally {
         // Close the database connection on completion or error
@@ -92,66 +102,121 @@ export async function setupMongoChangeStream(
     }
 }
 
-export async function setupWebsocketListeners(
-    changeStreamWS: WebsocketChangeStreamHandler,
+export async function startServer(
+    context: CustomContext,
 ) {
-    if (changeStreamWS.wss) {
-        changeStreamWS.wss.on('connection', function connection(ws: ActiveWebsocket) {
+    context.wss = new WebSocketServer({
+        // port: 8080,
+        noServer: true,
+        backlog: BACKLOG_CONNECTIONS,
+        maxPayload: PAYLOAD_SIZE_BYTES,
+
+    });
+    context.pinger = setupPinging(context);
+    setupWebsocketListeners(context);
+}
+
+export async function setupWebsocketListeners(
+    context: CustomContext,
+) {
+    if (context.wss) {
+        context.wss.on('connection', function connection(ws: ActiveWebsocket, request, ...args: string[]) {
+            let ipAddr = '';
+            if (deployment === 'prod') {
+                ipAddr = request.headers['x-forwarded-for']
+                    ? (request.headers['x-forwarded-for'] as string).split(',')[0].trim()
+                    : request.socket.remoteAddress || '';
+                console.log(`Received connection from ${request.socket.remoteAddress}:`)
+                console.log(util.inspect(request.headers, { showHidden: false, depth: null, colors: true }));
+            } else {
+                ipAddr = request.socket.remoteAddress || '';
+                console.log(`Received connection from ${ipAddr}:`)
+                console.log(util.inspect(request.headers, { showHidden: false, depth: null, colors: true }));
+            }
+            // Create Room link
+            const room = context.roomMap[args[0]]
+            if (room.userWSHead) {
+                room.userWSHead.prevClientInRoom = ws
+                ws.nextClientInRoom = room.userWSHead;
+            }
+            room.userWSHead = ws;
+            room.userCount += 1;
+
+            // Create User link
+            if (!context.userMap[args[1]]) {
+                context.userMap[args[1]]!.socket?.close()
+                context.userMap[args[1]]!.socket = ws
+            } else {
+                context.userMap[args[1]] = {
+                    connectedAtTs: Date.now(),
+                    rateLimitLeft: RATE_LIMIT_HALF_MIN,
+                    roomId: args[0],
+                };
+            }
+            ws.userObj = context.userMap[args[1]];
+
             ws.isAlive = true;
             ws.on('error', console.error);
+            ws.on('close', (code, reason) => {
+                // Clean up a few things here
+                const userObj = ws.userObj!;
+                userObj.socket = undefined;
+                const room = context.roomMap[userObj.roomId!];
+                if (room.userWSHead === ws)
+                    room.userWSHead = ws.nextClientInRoom;
+                else {
+                    ws.prevClientInRoom!.nextClientInRoom = ws.nextClientInRoom;
+                    if (ws.nextClientInRoom)
+                        ws.nextClientInRoom.prevClientInRoom = ws.prevClientInRoom;
+                }
+
+            });
             ws.on('pong', (ws: ActiveWebsocket, buffer: Buffer) => {
                 ws.isAlive = true;
             });
         });
 
-        changeStreamWS.wss.on('listening', () => {
-            console.log('listening')
-            setupMongoChangeStream(changeStreamWS, changeStreamWS.wss!).catch(e => console.log(e));
-        });
 
-        changeStreamWS.wss.on('close', async function close() {
+        context.wss.on('close', async function close() {
             try {
-                changeStreamWS.wss!.removeAllListeners()
+                context.wss!.removeAllListeners()
             } catch (e) { }
             console.log('closed')
-            if (changeStreamWS.pinger)
-                clearInterval(changeStreamWS.pinger);
-            console.log('changestream:', changeStreamWS)
-            if (changeStreamWS.cs) {
-                try {
-                    await changeStreamWS.cs.close();
-                    console.log("closed changeStream")
-                    await simulateAsyncPause(4000);
-                    changeStreamWS.wss = new WebSocketServer({ port: 8080 });
-                    changeStreamWS.pinger = setupPinging(changeStreamWS);
-                    setupWebsocketListeners(changeStreamWS);
+            if (context.pinger)
+                clearInterval(context.pinger);
 
-                } catch (e) {
-                    console.log('ERROR inside close():', e)
-                }
-
+            try {
+                // await context.cs.close();
+                // console.log("closed changeStream")
+                // await simulateAsyncPause(4000);
+                await startServer(context)
+            } catch (e) {
+                console.log('ERROR inside close():', e)
             }
+
+
         });
 
 
     }
 }
 
-export function setupPinging(changeStreamWS: WebsocketChangeStreamHandler) {
+export function setupPinging(changeStreamWS: CustomContext) {
     const interval = setInterval(function ping() {
         console.log('pinging ', Date.now())
         if (changeStreamWS.wss) {
             changeStreamWS.wss.clients.forEach(function each(ws) {
                 const activeWs = ws as ActiveWebsocket;
-                if (!activeWs.isAlive) return activeWs.terminate();
+                if (!activeWs.isAlive) return activeWs.close();
 
                 activeWs.isAlive = false;
                 activeWs.ping();
             });
             changeStreamWS.wss!.close()
-        }
+        } else
+            console.log('pinging failed WSS not running');
 
         // interval.refresh()
-    }, 10000);
+    }, 20000);
     return interval;
 }
