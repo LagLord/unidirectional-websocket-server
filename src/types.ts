@@ -1,5 +1,6 @@
 import { ChangeStream, ChangeStreamInsertDocument } from "mongodb";
 import WebSocket, { WebSocketServer, } from 'ws';
+import http from 'http';
 
 export interface ChatMessage {
     userId: string;
@@ -36,13 +37,13 @@ export type ChangeStreamInsertDoc = ChangeStreamInsertDocument<ChatMessage>;
 export type StoredUserObject = {
     displayName: string;
     profilePicture: string;
-    description: string;
+    bio: string;
 }
 
 export interface ConnectedUserObj extends Partial<StoredUserObject> {
     roomId?: string;
     connectedAtTs?: number;
-    socket?: ActiveWebsocket;
+    client?: ActiveWebsocket;
     bannedUntilTS?: number;
     rateLimitLeft?: number;
 }
@@ -53,4 +54,9 @@ export interface RoomObj {
     userWSHead?: ActiveWebsocket;
     private?: boolean;
     userIdsAllowed?: string[];
+}
+
+export interface ServerHeaders extends http.IncomingHttpHeaders {
+    userid?: string;
+    roomid?: string;
 }

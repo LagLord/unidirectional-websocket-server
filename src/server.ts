@@ -12,6 +12,7 @@ import {
 } from './types';
 import util from 'util';
 import { BACKLOG_CONNECTIONS, CHANGE_STREAM_LOOP_MS, CHAT_COLLECTION, PAYLOAD_SIZE_BYTES, RATE_LIMIT_HALF_MIN } from "./constants";
+import { setupChatrooms, setupUserMap } from './utils';
 
 //@ts-ignore
 const deployment: 'prod' | 'dev' = process.env.DEPLOYMENT!;
@@ -19,7 +20,7 @@ const uri = process.env.MONGODB_URL!;
 const dbName = process.env.DB_NAME!;
 const colName = CHAT_COLLECTION;
 console.log(dbName, colName);
-
+const client = new MongoClient(uri,);
 
 
 export const simulateAsyncPause = (t: number) =>
@@ -27,10 +28,19 @@ export const simulateAsyncPause = (t: number) =>
         setTimeout(() => resolve(''), t);
     });
 
+async function checkConnection() {
+    try {
+        await client.connect();
+        console.log('Connected to MongoDB');
+    } catch (error) {
+        console.log('Failed to connect to MongoDB', error);
+    }
+}
+
 export async function setupMongoChangeStream(
     context: CustomContext,
 ) {
-    const client = new MongoClient(uri,);
+    await checkConnection();
     try {
         const database = client.db(dbName);
         const chat_server = database.collection<ChatMessage>(colName);
@@ -53,7 +63,7 @@ export async function setupMongoChangeStream(
                     roomId: data.roomId,
                     ts: data.ts,
                     userId: data.userId,
-                    description: user?.description,
+                    description: user?.bio,
                     displayName: user?.displayName,
                     imageUrl: user?.profilePicture,
                 }
@@ -64,7 +74,7 @@ export async function setupMongoChangeStream(
                     console.log('clientAlive:', currentClient.isAlive)
 
                     currentClient.send(JSON.stringify(chatMessage), (error) => {
-                        console.log('Faield to send message:', error);
+                        if (error) console.log('Failed to send message:', error);
                     })
                     currentClient = currentClient.nextClientInRoom;
                 }
@@ -114,13 +124,17 @@ export async function startServer(
     });
     context.pinger = setupPinging(context);
     setupWebsocketListeners(context);
+    await setupChatrooms(client.db(dbName), context.roomMap);
+    await setupUserMap(client.db(dbName), context.userMap);
+    console.log(util.inspect(context.roomMap, { showHidden: false, depth: null, colors: true }));
+    console.log(util.inspect(context.userMap, { showHidden: false, depth: null, colors: true }));
 }
 
 export async function setupWebsocketListeners(
     context: CustomContext,
 ) {
     if (context.wss) {
-        context.wss.on('connection', function connection(ws: ActiveWebsocket, request, ...args: string[]) {
+        context.wss.on('connection', function connection(ws: ActiveWebsocket, request, ...args: string[][]) {
             let ipAddr = '';
             if (deployment === 'prod') {
                 ipAddr = request.headers['x-forwarded-for']
@@ -134,34 +148,39 @@ export async function setupWebsocketListeners(
                 console.log(util.inspect(request.headers, { showHidden: false, depth: null, colors: true }));
             }
             // Create Room link
-            const room = context.roomMap[args[0]]
+            const [userId, roomId] = args[0];
+            const room = context.roomMap[roomId]
+            console.log(userId, roomId, room)
             if (room.userWSHead) {
                 room.userWSHead.prevClientInRoom = ws
                 ws.nextClientInRoom = room.userWSHead;
             }
             room.userWSHead = ws;
             room.userCount += 1;
-
+            const userObj = context.userMap[userId];
             // Create User link
-            if (!context.userMap[args[1]]) {
-                context.userMap[args[1]]!.socket?.close()
-                context.userMap[args[1]]!.socket = ws
+            if (userObj.client) {
+                userObj!.client?.close();
+                userObj.rateLimitLeft = (userObj.rateLimitLeft ?? RATE_LIMIT_HALF_MIN) - 1
+                if (userObj.rateLimitLeft < 0)
+                    userObj.bannedUntilTS = Date.now() + 30 * 1000; // 30s ban for next request
             } else {
-                context.userMap[args[1]] = {
-                    connectedAtTs: Date.now(),
-                    rateLimitLeft: RATE_LIMIT_HALF_MIN,
-                    roomId: args[0],
-                };
+                userObj.rateLimitLeft = RATE_LIMIT_HALF_MIN - 1;
             }
-            ws.userObj = context.userMap[args[1]];
+            userObj!.client = ws;
+            userObj!.roomId = roomId;
+            userObj!.connectedAtTs = Date.now();
+            ws.userObj = userObj;
 
             ws.isAlive = true;
             ws.on('error', console.error);
             ws.on('close', (code, reason) => {
                 // Clean up a few things here
+                console.log('clientCLosed', code, reason)
                 const userObj = ws.userObj!;
-                userObj.socket = undefined;
+                userObj.client = undefined;
                 const room = context.roomMap[userObj.roomId!];
+                room.userCount -= 1;
                 if (room.userWSHead === ws)
                     room.userWSHead = ws.nextClientInRoom;
                 else {
@@ -211,12 +230,20 @@ export function setupPinging(changeStreamWS: CustomContext) {
 
                 activeWs.isAlive = false;
                 activeWs.ping();
+                // Also increase ratelimit counter
+                activeWs.userObj!.rateLimitLeft = Math.min(
+                    RATE_LIMIT_HALF_MIN,
+                    activeWs.userObj!.rateLimitLeft! + RATE_LIMIT_HALF_MIN
+                )
             });
-            changeStreamWS.wss!.close()
+            console.log(`ActiveConnections: ${changeStreamWS.wss.clients.size}\n
+                        UserMap len: ${Object.values(changeStreamWS.userMap).filter(i => i.client).length}\n
+                        RoomMap ${util.inspect(changeStreamWS.roomMap, { showHidden: false, depth: 2, colors: true })}`)
+            // changeStreamWS.wss!.close()
         } else
             console.log('pinging failed WSS not running');
 
         // interval.refresh()
-    }, 20000);
+    }, 30000);
     return interval;
 }
