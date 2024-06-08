@@ -66,7 +66,7 @@ server.on('upgrade', async function upgrade(request, socket, head) {
 
     if (!context.wss)
         return;
-    console.log(socket)
+    // console.log(socket)
     const headers = request.headers as ServerHeaders;
     console.log(headers.userid, headers.roomid)
     let userObj: ConnectedUserObj | undefined;

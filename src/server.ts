@@ -130,11 +130,21 @@ export async function startServer(
     console.log(util.inspect(context.userMap, { showHidden: false, depth: null, colors: true }));
 }
 
+// Async function to close a WebSocket client connection and wait until it's fully closed
+async function closeWebSocketConnection(ws: ActiveWebsocket) {
+    return new Promise((resolve, reject) => {
+        ws.on('close', () => {
+            resolve(1);
+        });
+        ws.close();
+    });
+}
+
 export async function setupWebsocketListeners(
     context: CustomContext,
 ) {
     if (context.wss) {
-        context.wss.on('connection', function connection(ws: ActiveWebsocket, request, ...args: string[][]) {
+        context.wss.on('connection', async function connection(ws: ActiveWebsocket, request, ...args: string[][]) {
             let ipAddr = '';
             if (deployment === 'prod') {
                 ipAddr = request.headers['x-forwarded-for']
@@ -147,20 +157,21 @@ export async function setupWebsocketListeners(
                 console.log(`Received connection from ${ipAddr}:`)
                 console.log(util.inspect(request.headers, { showHidden: false, depth: null, colors: true }));
             }
-            // Create Room link
+
+
             const [userId, roomId] = args[0];
-            const room = context.roomMap[roomId]
-            console.log(userId, roomId, room)
-            if (room.userWSHead) {
-                room.userWSHead.prevClientInRoom = ws
-                ws.nextClientInRoom = room.userWSHead;
-            }
-            room.userWSHead = ws;
-            room.userCount += 1;
             const userObj = context.userMap[userId];
             // Create User link
             if (userObj.client) {
-                userObj!.client?.close();
+                await closeWebSocketConnection(userObj!.client)
+                // userObj!.client.close();
+                //@ts-ignore
+                // console.log('clientStatus: ', util.inspect(userObj!.client._events.close.toString(), { showHidden: false, depth: null, colors: true }))
+
+                // while (userObj!.client) {
+                //     console.log(userObj!.client?.readyState)
+                //     await simulateAsyncPause(1000);
+                // }
                 userObj.rateLimitLeft = (userObj.rateLimitLeft ?? RATE_LIMIT_HALF_MIN) - 1
                 if (userObj.rateLimitLeft < 0)
                     userObj.bannedUntilTS = Date.now() + 30 * 1000; // 30s ban for next request
@@ -172,13 +183,22 @@ export async function setupWebsocketListeners(
             userObj!.connectedAtTs = Date.now();
             ws.userObj = userObj;
 
+            // Create Room link
+            const room = context.roomMap[roomId]
+            console.log(userId, roomId, room)
+            if (room.userWSHead) {
+                room.userWSHead.prevClientInRoom = ws
+                ws.nextClientInRoom = room.userWSHead;
+            }
+            room.userWSHead = ws;
+            room.userCount += 1;
+
             ws.isAlive = true;
             ws.on('error', console.error);
             ws.on('close', (code, reason) => {
                 // Clean up a few things here
                 console.log('clientCLosed', code, reason)
                 const userObj = ws.userObj!;
-                userObj.client = undefined;
                 const room = context.roomMap[userObj.roomId!];
                 room.userCount -= 1;
                 if (room.userWSHead === ws)
@@ -188,7 +208,7 @@ export async function setupWebsocketListeners(
                     if (ws.nextClientInRoom)
                         ws.nextClientInRoom.prevClientInRoom = ws.prevClientInRoom;
                 }
-
+                userObj.client = undefined;
             });
             ws.on('pong', (ws: ActiveWebsocket, buffer: Buffer) => {
                 ws.isAlive = true;
@@ -236,9 +256,10 @@ export function setupPinging(changeStreamWS: CustomContext) {
                     activeWs.userObj!.rateLimitLeft! + RATE_LIMIT_HALF_MIN
                 )
             });
-            console.log(`ActiveConnections: ${changeStreamWS.wss.clients.size}\n
-                        UserMap len: ${Object.values(changeStreamWS.userMap).filter(i => i.client).length}\n
-                        RoomMap ${util.inspect(changeStreamWS.roomMap, { showHidden: false, depth: 2, colors: true })}`)
+            console.log(`
+ActiveConnections: ${changeStreamWS.wss.clients.size}\n
+UserMap len: ${Object.values(changeStreamWS.userMap).filter(i => i.client).length}\n
+RoomMap ${util.inspect(changeStreamWS.roomMap, { showHidden: false, depth: 3, colors: true })}`)
             // changeStreamWS.wss!.close()
         } else
             console.log('pinging failed WSS not running');
