@@ -55,9 +55,9 @@ export async function setupMongoChangeStream(
                 const data = (next as ChangeStreamInsertDoc).fullDocument;
                 const user = context.userMap[data.userId];
                 if (data.roomId)
-                    var room = context.roomMap['__global__'];
-                else
                     var room = context.roomMap[data.roomId!];
+                else
+                    var room = context.roomMap['__global__'];
                 const chatMessage: ChatMessage = {
                     msg: data.msg,
                     roomId: data.roomId,
@@ -88,7 +88,7 @@ export async function setupMongoChangeStream(
         await chat_server.insertOne({
             // displayName: "Shriveled Datum",
             userId: '123243535',
-            roomId: 'Global',
+            roomId: '__global__',
             msg: "No bytes, no problem. Just insert a document, in MongoDB",
             // imageUrl: 'https://imagedelivery.net/9i0Mt_dC7lopRIG36ZQvKw/XScape%20Legends%20Card%20Assassin.png/w=200',
             ts: Date.now(),
@@ -106,7 +106,10 @@ export async function setupMongoChangeStream(
         }
         // await context.close()
         // console.log('changeStream closing...', Date.now())
-    } finally {
+    } catch (e) {
+        console.log(e)
+    }
+    finally {
         // Close the database connection on completion or error
         await client.close();
     }
@@ -210,8 +213,12 @@ export async function setupWebsocketListeners(
                 }
                 userObj.client = undefined;
             });
-            ws.on('pong', (ws: ActiveWebsocket, buffer: Buffer) => {
+            ws.on('ping', (ws: ActiveWebsocket, buffer: Buffer) => {
+                console.log('pingReceived:', Date.now())
+            });
+            ws.on('pong', (_: ActiveWebsocket, buffer: Buffer) => {
                 ws.isAlive = true;
+                console.log('pongReceived:', Date.now())
             });
         });
 
@@ -246,10 +253,14 @@ export function setupPinging(changeStreamWS: CustomContext) {
         if (changeStreamWS.wss) {
             changeStreamWS.wss.clients.forEach(function each(ws) {
                 const activeWs = ws as ActiveWebsocket;
-                if (!activeWs.isAlive) return activeWs.close();
+                if (!activeWs.isAlive) {
+                    console.log('Inactive client closing')
+                    activeWs.close();
+                    return;
+                };
 
                 activeWs.isAlive = false;
-                activeWs.ping();
+                activeWs.ping('ping');
                 // Also increase ratelimit counter
                 activeWs.userObj!.rateLimitLeft = Math.min(
                     RATE_LIMIT_HALF_MIN,

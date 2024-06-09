@@ -6,6 +6,7 @@ import http from 'http';
 import { ConnectedUserObj, CustomContext, RoomObj, ServerHeaders } from './types';
 import { CHAT_COLLECTION, RATE_LIMIT_HALF_MIN } from './constants';
 import internal from 'stream';
+const url = require('url');
 
 let context: CustomContext = {
     cs: null,
@@ -68,29 +69,27 @@ server.on('upgrade', async function upgrade(request, socket, head) {
         return;
     // console.log(socket)
     const headers = request.headers as ServerHeaders;
-    console.log(headers.userid, headers.roomid)
+    const parameters = url.parse(request.url, true).query;
+    const userId = parameters.userid;
+    const roomId = parameters.roomid;
+    console.log(userId, roomId)
     let userObj: ConnectedUserObj | undefined;
     try {
 
         // This function is not defined on purpose. Implement it with your own logic.
-        if (!headers.userid ||
-            !headers.roomid)
+        if (!userId ||
+            !roomId)
             throw new Error("Invalid headers");
-        userObj = context.userMap[headers.userid];
+        userObj = context.userMap[userId];
         const tsNow = Date.now();
         if (
             !userObj ||
-            !context.roomMap[headers.roomid] ||
-            (context.userMap[headers.userid].bannedUntilTS &&
-                context.userMap[headers.userid].bannedUntilTS! > tsNow)
+            !context.roomMap[roomId] ||
+            (context.userMap[userId].bannedUntilTS &&
+                context.userMap[userId].bannedUntilTS! > tsNow)
         )
             throw new Error("Invalid headers");
 
-        // if (userObj.client?.OPEN) {
-        //     userObj.rateLimitLeft = (userObj.rateLimitLeft ?? RATE_LIMIT_HALF_MIN) - 1
-        //     if (userObj.rateLimitLeft < 0)
-        //         userObj.bannedUntilTS = tsNow + 30 * 1000; // 30s ban for next request
-        // }
     } catch (e) {
         console.log(e)
         next(socket, String(e), userObj);
@@ -100,7 +99,7 @@ server.on('upgrade', async function upgrade(request, socket, head) {
     }
 
     context.wss.handleUpgrade(request, socket, head, function done(ws) {
-        context.wss!.emit('connection', ws, request, [headers.userid, headers.roomid]);
+        context.wss!.emit('connection', ws, request, [userId, roomId]);
     });
 });
 
