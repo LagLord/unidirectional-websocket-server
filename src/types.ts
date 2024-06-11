@@ -10,7 +10,7 @@ export interface ChatMessage {
 
     displayName?: string;
     imageUrl?: string;
-    description?: string
+    bio?: string
 };
 
 export interface ActiveWebsocket extends WebSocket {
@@ -48,12 +48,18 @@ export interface ConnectedUserObj extends Partial<StoredUserObject> {
     rateLimitLeft?: number;
 }
 
+export interface CircularArray {
+    buffer: Array<ChatMessage>;
+    head: number;
+}
+
 export interface RoomObj {
     roomName: string;
     userCount: number;
     userWSHead?: ActiveWebsocket;
     private?: boolean;
     userIdsAllowed?: string[];
+    newMessages: CircularArray;
 }
 
 export interface ServerHeaders extends http.IncomingHttpHeaders {

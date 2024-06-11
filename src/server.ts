@@ -11,8 +11,9 @@ import {
     CustomContext
 } from './types';
 import util from 'util';
-import { BACKLOG_CONNECTIONS, CHANGE_STREAM_LOOP_MS, CHAT_COLLECTION, PAYLOAD_SIZE_BYTES, RATE_LIMIT_HALF_MIN } from "./constants";
-import { setupChatrooms, setupUserMap } from './utils';
+import { BACKLOG_CONNECTIONS, CHANGE_STREAM_LOOP_MS, CHAT_COLLECTION, COMPRESSION_MIN_USER_THRESHOLD, COMPRESSION_OPTIONS, GLOBAL_SERVER_NAME, PAYLOAD_SIZE_BYTES, RATE_LIMIT_HALF_MIN } from "./constants";
+import { getRoomMessages, setupChatrooms, setupUserMap } from './utils';
+import zlib from 'node:zlib';
 
 //@ts-ignore
 const deployment: 'prod' | 'dev' = process.env.DEPLOYMENT!;
@@ -57,23 +58,36 @@ export async function setupMongoChangeStream(
                 if (data.roomId)
                     var room = context.roomMap[data.roomId!];
                 else
-                    var room = context.roomMap['__global__'];
+                    var room = context.roomMap[GLOBAL_SERVER_NAME];
                 const chatMessage: ChatMessage = {
                     msg: data.msg,
                     roomId: data.roomId,
                     ts: data.ts,
                     userId: data.userId,
-                    description: user?.bio,
+                    bio: user?.bio,
                     displayName: user?.displayName,
                     imageUrl: user?.profilePicture,
                 }
+                const jsonString = JSON.stringify(chatMessage);
+                const buffer = Buffer.from(jsonString, 'utf-8');
 
+                // Compress only when users in room > threshold
+                const compress = room.userCount > COMPRESSION_MIN_USER_THRESHOLD;
+                const messageBuffer = compress
+                    ? zlib.deflateSync(buffer, COMPRESSION_OPTIONS)
+                    : buffer;
+                const metadataBuffer = Buffer.alloc(1);
+                metadataBuffer.writeUInt8(compress ? 1 : 0, 0);
+                const finalBuffer = Buffer.concat([messageBuffer, metadataBuffer]);
+                if (deployment === 'dev')
+                    console.log(`Message length without compression : ${buffer.length}\tAfter: ${messageBuffer.length}}`)
+                console.log(messageBuffer)
                 let currentClient: ActiveWebsocket | undefined = room.userWSHead;
                 while (currentClient) {
                     // @ts-ignore
                     console.log('clientAlive:', currentClient.isAlive)
 
-                    currentClient.send(JSON.stringify(chatMessage), (error) => {
+                    currentClient.send(finalBuffer, (error) => {
                         if (error) console.log('Failed to send message:', error);
                     })
                     currentClient = currentClient.nextClientInRoom;
@@ -88,7 +102,7 @@ export async function setupMongoChangeStream(
         await chat_server.insertOne({
             // displayName: "Shriveled Datum",
             userId: '123243535',
-            roomId: '__global__',
+            roomId: GLOBAL_SERVER_NAME,
             msg: "No bytes, no problem. Just insert a document, in MongoDB",
             // imageUrl: 'https://imagedelivery.net/9i0Mt_dC7lopRIG36ZQvKw/XScape%20Legends%20Card%20Assassin.png/w=200',
             ts: Date.now(),
@@ -129,6 +143,9 @@ export async function startServer(
     setupWebsocketListeners(context);
     await setupChatrooms(client.db(dbName), context.roomMap);
     await setupUserMap(client.db(dbName), context.userMap);
+    for (const roomId in context.roomMap) {
+        await getRoomMessages(client.db(dbName), roomId, context.roomMap[roomId], context.userMap);
+    }
     console.log(util.inspect(context.roomMap, { showHidden: false, depth: null, colors: true }));
     console.log(util.inspect(context.userMap, { showHidden: false, depth: null, colors: true }));
 }
@@ -197,6 +214,7 @@ export async function setupWebsocketListeners(
             room.userCount += 1;
 
             ws.isAlive = true;
+            ws.send(JSON.stringify(room.newMessages),);
             ws.on('error', console.error);
             ws.on('close', (code, reason) => {
                 // Clean up a few things here

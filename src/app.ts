@@ -4,7 +4,7 @@ import {
 } from './server';
 import http from 'http';
 import { ConnectedUserObj, CustomContext, RoomObj, ServerHeaders } from './types';
-import { CHAT_COLLECTION, RATE_LIMIT_HALF_MIN } from './constants';
+import { CHAT_COLLECTION, MESSAGE_BUFFER_LEN, RATE_LIMIT_HALF_MIN, GLOBAL_SERVER_NAME } from './constants';
 import internal from 'stream';
 const url = require('url');
 
@@ -12,9 +12,13 @@ let context: CustomContext = {
     cs: null,
     wss: null,
     roomMap: {
-        __global__: {
+        [`${GLOBAL_SERVER_NAME}`]: {
             roomName: 'Public',
             userCount: 0,
+            newMessages: {
+                buffer: new Array(MESSAGE_BUFFER_LEN),
+                head: 0,
+            }
         }
     },
     // This is for authentication purposes
