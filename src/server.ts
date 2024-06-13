@@ -12,7 +12,7 @@ import {
 } from './types';
 import util from 'util';
 import { BACKLOG_CONNECTIONS, CHANGE_STREAM_LOOP_MS, CHAT_COLLECTION, COMPRESSION_MIN_USER_THRESHOLD, COMPRESSION_OPTIONS, GLOBAL_SERVER_NAME, PAYLOAD_SIZE_BYTES, RATE_LIMIT_HALF_MIN } from "./constants";
-import { getRoomMessages, setupChatrooms, setupUserMap } from './utils';
+import { compressMessage, getRoomMessages, pushMessage, setupChatrooms, setupUserMap } from './utils';
 import zlib from 'node:zlib';
 
 //@ts-ignore
@@ -49,7 +49,7 @@ export async function setupMongoChangeStream(
         context.cs = chat_server.watch();
 
         // Set up a change stream listener when change events are emitted
-        context.cs.on("change", next => {
+        context.cs.on("change", async (next) => {
             // Print any change event
             console.log("received a change to the collection: \t", next);
             if (next.operationType === 'insert' && next.ns.coll === colName) {
@@ -68,20 +68,21 @@ export async function setupMongoChangeStream(
                     displayName: user?.displayName,
                     imageUrl: user?.profilePicture,
                 }
-                const jsonString = JSON.stringify(chatMessage);
-                const buffer = Buffer.from(jsonString, 'utf-8');
-
                 // Compress only when users in room > threshold
                 const compress = room.userCount > COMPRESSION_MIN_USER_THRESHOLD;
-                const messageBuffer = compress
-                    ? zlib.deflateSync(buffer, COMPRESSION_OPTIONS)
-                    : buffer;
-                const metadataBuffer = Buffer.alloc(1);
-                metadataBuffer.writeUInt8(compress ? 1 : 0, 0);
-                const finalBuffer = Buffer.concat([messageBuffer, metadataBuffer]);
-                if (deployment === 'dev')
-                    console.log(`Message length without compression : ${buffer.length}\tAfter: ${messageBuffer.length}}`)
-                console.log(messageBuffer)
+                let finalBuffer: Buffer;
+                if (compress) {
+                    finalBuffer = compressMessage(chatMessage);
+                } else {
+                    const jsonString = JSON.stringify(chatMessage);
+                    const buffer = Buffer.from(jsonString, 'utf-8');
+                    // Set compress bit to 0 (false)
+                    const metadataBuffer = Buffer.alloc(1);
+                    metadataBuffer.writeUInt8(0, 0);
+                    finalBuffer = Buffer.concat([buffer, metadataBuffer]);
+                }
+                await simulateAsyncPause(3000)
+                console.log(finalBuffer)
                 let currentClient: ActiveWebsocket | undefined = room.userWSHead;
                 while (currentClient) {
                     // @ts-ignore
@@ -92,20 +93,9 @@ export async function setupMongoChangeStream(
                     })
                     currentClient = currentClient.nextClientInRoom;
                 }
+                // Add new message to roomMessages circular array
+                await pushMessage(room.newMessages, finalBuffer)
             }
-        });
-
-        // Pause before inserting a document
-        await simulateAsyncPause(1000);
-
-        // Insert a new document into the collection
-        await chat_server.insertOne({
-            // displayName: "Shriveled Datum",
-            userId: '123243535',
-            roomId: GLOBAL_SERVER_NAME,
-            msg: "No bytes, no problem. Just insert a document, in MongoDB",
-            // imageUrl: 'https://imagedelivery.net/9i0Mt_dC7lopRIG36ZQvKw/XScape%20Legends%20Card%20Assassin.png/w=200',
-            ts: Date.now(),
         });
 
         while (true) {

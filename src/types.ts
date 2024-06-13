@@ -49,7 +49,7 @@ export interface ConnectedUserObj extends Partial<StoredUserObject> {
 }
 
 export interface CircularArray {
-    buffer: Array<ChatMessage>;
+    buffer: Array<Buffer>;
     head: number;
 }
 

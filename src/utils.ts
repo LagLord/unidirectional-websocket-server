@@ -1,6 +1,7 @@
 import { Db } from "mongodb";
 import { ChatMessage, CircularArray, ConnectedUserObj, RoomObj } from './types';
-import { GLOBAL_SERVER_NAME, MESSAGE_BUFFER_LEN } from "./constants";
+import { COMPRESSION_OPTIONS, GLOBAL_SERVER_NAME, MESSAGE_BUFFER_LEN } from "./constants";
+import zlib from 'node:zlib';
 
 //@ts-ignore
 const deployment: 'prod' | 'dev' = process.env.DEPLOYMENT!;
@@ -62,18 +63,33 @@ export async function getRoomMessages(
         aggregate<ChatMessage>(pipeline).toArray();
     if (deployment === 'dev')
         console.log(`Found ${roomMessages.length} messages for ${room.roomName} room`)
+    console.log('roomMessage Cnt:', roomMessages.length)
     roomMessages.forEach((message, idx) => {
         const user = userMap[message.userId];
         if (user) {
             message.bio = user.bio;
             message.displayName = user.displayName;
             message.imageUrl = user.profilePicture;
-            pushMessage(room.newMessages, message);
+            pushMessage(room.newMessages, compressMessage(message));
         }
+        console.log(message.userId, user, idx)
     })
 }
 
-export async function pushMessage(arr: CircularArray, msg: ChatMessage) {
+export function compressMessage(msg: ChatMessage) {
+    const jsonString = JSON.stringify(msg);
+    const buffer = Buffer.from(jsonString, 'utf-8');
+
+    const messageBuffer = zlib.deflateSync(buffer, COMPRESSION_OPTIONS);
+    // Set compress bit if compressed
+    const metadataBuffer = Buffer.alloc(1);
+    metadataBuffer.writeUInt8(1, 0);
+    if (deployment === 'dev')
+        console.log(`Message length without compression : ${buffer.length}\tAfter: ${messageBuffer.length}}`)
+    return Buffer.concat([messageBuffer, metadataBuffer]);
+}
+
+export async function pushMessage(arr: CircularArray, msg: Buffer) {
     if (arr.head < arr.buffer.length) {
         arr.buffer[arr.head] = msg;
         arr.head += 1;
