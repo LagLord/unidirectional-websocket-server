@@ -54,7 +54,7 @@ export async function getRoomMessages(
             $match: { roomId },
         },
         { $sort: { ts: -1 } },
-        { $sample: { size: MESSAGE_BUFFER_LEN } },
+        { $limit: MESSAGE_BUFFER_LEN },
         { $sort: { ts: 1 } },
         { $project: { _id: 0 } },
     ];
@@ -72,7 +72,7 @@ export async function getRoomMessages(
             message.imageUrl = user.profilePicture;
             pushMessage(room.newMessages, compressMessage(message));
         }
-        console.log(message.userId, user, idx)
+        console.log(message.userId, message.msg, idx)
     })
 }
 

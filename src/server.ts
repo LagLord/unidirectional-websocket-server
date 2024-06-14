@@ -81,7 +81,7 @@ export async function setupMongoChangeStream(
                     metadataBuffer.writeUInt8(0, 0);
                     finalBuffer = Buffer.concat([buffer, metadataBuffer]);
                 }
-                await simulateAsyncPause(3000)
+                await simulateAsyncPause(1000)
                 console.log(finalBuffer)
                 let currentClient: ActiveWebsocket | undefined = room.userWSHead;
                 while (currentClient) {
