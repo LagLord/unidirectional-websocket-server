@@ -3,7 +3,7 @@ import {
     setupMongoChangeStream
 } from './server';
 import http from 'http';
-import { ConnectedUserObj, CustomContext, RoomObj, ServerHeaders } from './types';
+import type { ConnectedUserObj, CustomContext, RoomObj, ServerHeaders } from './types';
 import { CHAT_COLLECTION, MESSAGE_BUFFER_LEN, RATE_LIMIT_HALF_MIN, GLOBAL_SERVER_NAME } from './constants';
 import internal from 'stream';
 const url = require('url');

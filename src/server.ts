@@ -4,7 +4,7 @@ import { MongoClient } from "mongodb";
 import * as dotenv from 'dotenv';
 dotenv.config({ path: '.env.local' });
 import { WebSocketServer, } from 'ws';
-import {
+import type {
     ActiveWebsocket,
     ChangeStreamInsertDoc,
     ChatMessage,
@@ -212,8 +212,11 @@ export async function setupWebsocketListeners(
                 const userObj = ws.userObj!;
                 const room = context.roomMap[userObj.roomId!];
                 room.userCount -= 1;
-                if (room.userWSHead === ws)
+                if (room.userWSHead === ws) {
                     room.userWSHead = ws.nextClientInRoom;
+                    if (room.userWSHead)
+                        room.userWSHead.prevClientInRoom = undefined;
+                }
                 else {
                     ws.prevClientInRoom!.nextClientInRoom = ws.nextClientInRoom;
                     if (ws.nextClientInRoom)
@@ -274,7 +277,9 @@ export function setupPinging(changeStreamWS: CustomContext) {
                     RATE_LIMIT_HALF_MIN,
                     activeWs.userObj!.rateLimitLeft! + RATE_LIMIT_HALF_MIN
                 )
+                console.log(`WS size : ${getObjectSize(activeWs)}`)
             });
+
             console.log(`
 ActiveConnections: ${changeStreamWS.wss.clients.size}\n
 UserMap len: ${Object.values(changeStreamWS.userMap).filter(i => i.client).length}\n
@@ -286,4 +291,33 @@ RoomMap ${util.inspect(changeStreamWS.roomMap, { showHidden: false, depth: 3, co
         // interval.refresh()
     }, 30000);
     return interval;
+}
+
+function getObjectSize(obj: any) {
+    const visitedObjects = new WeakSet();
+
+    function sizeOf(obj: any) {
+        if (obj === null || typeof obj !== "object") {
+            return 0;
+        }
+
+        if (visitedObjects.has(obj)) {
+            return 0;
+        }
+
+        visitedObjects.add(obj);
+
+        let bytes = 0;
+
+        for (const key in obj) {
+            if (Object.prototype.hasOwnProperty.call(obj, key)) {
+                bytes += key.length * 2; // assuming each character is 2 bytes
+                bytes += sizeOf(obj[key]);
+            }
+        }
+
+        return bytes;
+    }
+
+    return sizeOf(obj);
 }

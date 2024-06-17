@@ -1,5 +1,5 @@
 import { Db } from "mongodb";
-import { ChatMessage, CircularArray, ConnectedUserObj, RoomObj } from './types';
+import type { ChatMessage, CircularArray, ConnectedUserObj, RoomObj } from './types';
 import { COMPRESSION_OPTIONS, GLOBAL_SERVER_NAME, MESSAGE_BUFFER_LEN } from "./constants";
 import zlib from 'node:zlib';
 

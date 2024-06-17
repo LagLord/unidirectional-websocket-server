@@ -1,4 +1,4 @@
-import { ChangeStream, ChangeStreamInsertDocument } from "mongodb";
+import type { ChangeStream, ChangeStreamInsertDocument } from "mongodb";
 import WebSocket, { WebSocketServer, } from 'ws';
 import http from 'http';
 
@@ -23,7 +23,7 @@ export interface ActiveWebsocket extends WebSocket {
 export interface CustomContext {
     cs: ChangeStream | null;
     wss: WebSocketServer | null;
-    pinger?: NodeJS.Timeout;
+    pinger?: ReturnType<typeof setTimeout>;
     roomMap: {
         [key: string]: RoomObj;
     };

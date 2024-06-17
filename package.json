@@ -1,13 +1,7 @@
 {
-  "name": "y",
-  "version": "1.0.0",
-  "description": "",
-  "main": "server.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "author": "",
-  "license": "ISC",
+  "name": "bun-test",
+  "module": "index.ts",
+  "type": "module",
   "dependencies": {
     "@types/ws": "^8.5.10",
     "dotenv": "^16.4.5",
@@ -16,5 +10,11 @@
   },
   "optionalDependencies": {
     "bufferutil": "^4.0.8"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
   }
 }

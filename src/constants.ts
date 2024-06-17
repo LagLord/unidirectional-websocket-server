@@ -1,4 +1,4 @@
-import { ZlibOptions } from "node:zlib";
+import type { ZlibOptions } from "node:zlib";
 
 export const CHANGE_STREAM_LOOP_MS = 3000;
 export const PAYLOAD_SIZE_BYTES = 2 * 1000_000 // 2 mb for now
