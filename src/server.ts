@@ -81,7 +81,6 @@ export async function setupMongoChangeStream(
                     metadataBuffer.writeUInt8(0, 0);
                     finalBuffer = Buffer.concat([buffer, metadataBuffer]);
                 }
-                await simulateAsyncPause(1000)
                 console.log(finalBuffer)
                 let currentClient: ActiveWebsocket | undefined = room.userWSHead;
                 while (currentClient) {
@@ -99,11 +98,7 @@ export async function setupMongoChangeStream(
         });
 
         while (true) {
-
-            const t = Date.now()
-            console.log('changeStream running...', t)
             await simulateAsyncPause(CHANGE_STREAM_LOOP_MS);
-            console.log('changeStream running...', t)
             if (context.cs.closed) {
                 return setupMongoChangeStream(context);
             }
@@ -223,9 +218,6 @@ export async function setupWebsocketListeners(
                         ws.nextClientInRoom.prevClientInRoom = ws.prevClientInRoom;
                 }
                 userObj.client = undefined;
-            });
-            ws.on('ping', (ws: ActiveWebsocket, buffer: Buffer) => {
-                console.log('pingReceived:', Date.now())
             });
             ws.on('pong', (_: ActiveWebsocket, buffer: Buffer) => {
                 ws.isAlive = true;
